@@ -14,7 +14,7 @@ authors = [
   { name = "team procitec", email = "info@procitec.de" },
 ]
 dependencies = [
-  "sphinx>=8.2",
+  "sphinx>=8",
   "sphinx-needs>=9",
 ]
 
@@ -23,7 +23,7 @@ dev = [
   "pytest>=9.0",
   "ruff>=0.3",
   "mypy>=1.8",
-  "sphinx>=8.2",
+  "sphinx>=8",
   "sphinx-needs>=9",
 ]
 
@@ -53,6 +53,6 @@ dev = [
   "pytest>=9.0",
   "ruff>=0.3",
   "mypy>=1.8",
-  "sphinx>=8.2",
+  "sphinx>=8",
   "sphinx-needs>=9",
 ]
