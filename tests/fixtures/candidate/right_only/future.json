@@ -1,0 +1,27 @@
+{
+  "created": "2026-03-20T10:00:00",
+  "current_version": "1.0",
+  "project": "right only",
+  "versions": {
+    "1.0": {
+      "created": "2026-03-20T10:00:00",
+      "filters": {},
+      "filters_amount": 0,
+      "needs": {
+        "FUTURE_001": {
+          "id": "FUTURE_001",
+          "title": "Neuanforderung",
+          "description": "Nur rechts vorhanden",
+          "status": "draft",
+          "type": "req",
+          "type_name": "Requirement",
+          "tags": ["future"],
+          "links": [],
+          "docname": "future/index",
+          "sections": []
+        }
+      },
+      "needs_amount": 1
+    }
+  }
+}

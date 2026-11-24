@@ -1,0 +1,69 @@
+{
+  "created": "2026-03-24T11:00:00",
+  "current_version": "2.0",
+  "project": "reqdiff fixture",
+  "versions": {
+    "2.0": {
+      "created": "2026-03-24T11:00:00",
+      "filters": {},
+      "filters_amount": 0,
+      "needs": {
+        "REQ_001": {
+          "id": "REQ_001",
+          "title": "Anmeldung",
+          "description": "Benutzer kann sich anmelden",
+          "status": "open",
+          "type": "req",
+          "type_name": "Requirement",
+          "tags": [
+            "auth"
+          ],
+          "links": [],
+          "docname": "index",
+          "sections": [
+            "Authentication"
+          ]
+        },
+        "REQ_002": {
+          "id": "REQ_002",
+          "title": "Passwortregeln",
+          "description": "Passwort muss mindestens 12 Zeichen haben",
+          "status": "in_review",
+          "type": "req",
+          "type_name": "Requirement",
+          "tags": [
+            "auth",
+            "compliance",
+            "security"
+          ],
+          "links": [
+            "REQ_001",
+            "REQ_004"
+          ],
+          "docname": "security/passwords",
+          "sections": [
+            "Security"
+          ]
+        },
+        "REQ_004": {
+          "id": "REQ_004",
+          "title": "Audit Log",
+          "description": "Sicherheitsrelevante Aktionen werden protokolliert",
+          "status": "open",
+          "type": "req",
+          "type_name": "Requirement",
+          "tags": [
+            "security",
+            "audit"
+          ],
+          "links": [],
+          "docname": "security/audit",
+          "sections": [
+            "Security"
+          ]
+        }
+      },
+      "needs_amount": 3
+    }
+  }
+}

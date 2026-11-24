@@ -1,0 +1,51 @@
+{
+  "created": "2026-03-24T10:00:00",
+  "current_version": "1.0",
+  "project": "reqdiff fixture",
+  "versions": {
+    "1.0": {
+      "created": "2026-03-24T10:00:00",
+      "filters": {},
+      "filters_amount": 0,
+      "needs": {
+        "REQ_001": {
+          "id": "REQ_001",
+          "title": "Anmeldung",
+          "description": "Benutzer kann sich anmelden",
+          "status": "open",
+          "type": "req",
+          "type_name": "Requirement",
+          "tags": ["auth"],
+          "links": [],
+          "docname": "index",
+          "sections": ["Authentication"]
+        },
+        "REQ_002": {
+          "id": "REQ_002",
+          "title": "Passwortregeln",
+          "description": "Passwort muss mindestens 8 Zeichen haben",
+          "status": "open",
+          "type": "req",
+          "type_name": "Requirement",
+          "tags": ["auth", "security"],
+          "links": ["REQ_001"],
+          "docname": "security/passwords",
+          "sections": ["Security"]
+        },
+        "REQ_003": {
+          "id": "REQ_003",
+          "title": "CSV Export",
+          "description": "Daten können als CSV exportiert werden",
+          "status": "draft",
+          "type": "req",
+          "type_name": "Requirement",
+          "tags": ["export"],
+          "links": [],
+          "docname": "exports/csv",
+          "sections": ["Exports"]
+        }
+      },
+      "needs_amount": 3
+    }
+  }
+}

@@ -1,0 +1,58 @@
+[build-system]
+requires = ["uv_build>=0.11,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "needs-reqdiff"
+version = "26.1"
+description = "Compare sphinx-needs JSON exports and generate RST diff reports"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "team procitec", email = "info@procitec.de" },
+]
+dependencies = [
+  "sphinx>=8.2",
+  "sphinx-needs>=9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0",
+  "ruff>=0.3",
+  "mypy>=1.8",
+  "sphinx>=8.2",
+  "sphinx-needs>=9",
+]
+
+[project.scripts]
+needs-reqdiff = "needs_reqdiff.cli:main"
+
+[tool.uv.build-backend]
+source-include = ["build_package.py", "tests/**", "uv.lock"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = false
+
+[dependency-groups]
+dev = [
+  "pytest>=9.0",
+  "ruff>=0.3",
+  "mypy>=1.8",
+  "sphinx>=8.2",
+  "sphinx-needs>=9",
+]
