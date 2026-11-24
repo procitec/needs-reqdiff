@@ -368,8 +368,8 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
-    { name = "sphinx", specifier = ">=8.2" },
-    { name = "sphinx", marker = "extra == 'dev'", specifier = ">=8.2" },
+    { name = "sphinx", specifier = ">=8" },
+    { name = "sphinx", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "sphinx-needs", specifier = ">=9" },
     { name = "sphinx-needs", marker = "extra == 'dev'", specifier = ">=9" },
 ]
@@ -380,7 +380,7 @@ dev = [
     { name = "mypy", specifier = ">=1.8" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "ruff", specifier = ">=0.3" },
-    { name = "sphinx", specifier = ">=8.2" },
+    { name = "sphinx", specifier = ">=8" },
     { name = "sphinx-needs", specifier = ">=9" },
 ]
 
