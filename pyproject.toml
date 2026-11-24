@@ -15,7 +15,7 @@ authors = [
 ]
 dependencies = [
   "sphinx>=8",
-  "sphinx-needs>=9",
+  "sphinx-needs>=8",
 ]
 
 [project.optional-dependencies]
@@ -24,7 +24,7 @@ dev = [
   "ruff>=0.3",
   "mypy>=1.8",
   "sphinx>=8",
-  "sphinx-needs>=9",
+  "sphinx-needs>=8",
 ]
 
 [project.scripts]
@@ -54,5 +54,5 @@ dev = [
   "ruff>=0.3",
   "mypy>=1.8",
   "sphinx>=8",
-  "sphinx-needs>=9",
+  "sphinx-needs>=8",
 ]
