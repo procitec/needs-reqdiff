@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .loader import InvalidNeedsJsonError, JsonParseError, FileScanner, load_sphinx_needs_json
+from .loader import FileScanner, InvalidNeedsJsonError, JsonParseError, load_sphinx_needs_json
 from .models import ComparisonResult, FileComparison, FileLoadError, NeedDiff
 
 DEFAULT_COMPARE_FIELDS = (

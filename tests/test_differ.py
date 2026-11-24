@@ -13,7 +13,6 @@ from needs_reqdiff.rst_writer import (
     CHANGED_NEW_FOCUS_TAG,
     CHANGED_NEW_PREFIX,
     CHANGED_OLD_FOCUS_TAG,
-    CHANGED_OLD_PREFIX,
     _display_labels,
     write_reports,
 )

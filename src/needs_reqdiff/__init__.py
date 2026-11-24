@@ -2,8 +2,8 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
-from .api import generate_reqdiff
-from .sphinx_roles import setup
+from .api import generate_reqdiff as generate_reqdiff
+from .sphinx_roles import setup as setup
 
 try:
     __version__: str | None = version("needs-reqdiff")

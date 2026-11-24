@@ -487,7 +487,8 @@ def _render_index_rst(result: ComparisonResult) -> str:
     if result.errors:
         for error in result.errors:
             lines.append(
-                f"* ``{error.relative_path.as_posix()}`` ({error.side}, {error.error_type}): {error.message}"
+                f"* ``{error.relative_path.as_posix()}`` "
+                f"({error.side}, {error.error_type}): {error.message}"
             )
     else:
         lines.append("Keine Dateien mit Fehlern gefunden.")
