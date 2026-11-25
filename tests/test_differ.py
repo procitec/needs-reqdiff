@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from sphinx.cmd.build import build_main
@@ -189,6 +190,54 @@ def test_generated_rst_builds_as_html_with_sphinx(
     combined = warning_path.read_text(encoding="utf-8") if warning_path.exists() else ""
     assert "could not be imported" not in combined
     assert "unknown outgoing link" not in combined
+
+
+def test_line_break_changes_have_visible_markers_in_sphinx(
+    fixture_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    baseline, candidate = fixture_roots
+    for root, descriptions in (
+        (baseline, {"REQ_001": "Erste\nzweite\nZeile", "REQ_002": "Erste\r\nzweite Zeile"}),
+        (candidate, {"REQ_001": "Erste zweite\nZeile", "REQ_002": "Erste\nzweite Zeile"}),
+    ):
+        path = root / "valid" / "system.json"
+        data, version, _ = load_sphinx_needs_json(path)
+        for need_id, description in descriptions.items():
+            data["versions"][version]["needs"][need_id]["description"] = description
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    source = tmp_path / "source"
+    generate_reqdiff(baseline, candidate, source)
+    (source / "conf.py").write_text(
+        "extensions = ['sphinx_needs', 'needs_reqdiff']\n", encoding="utf-8"
+    )
+    output = tmp_path / "html"
+    assert build_main(["-b", "html", "-W", "-n", str(source), str(output)]) == 0
+    html = (output / "valid__system" / "diff.html").read_text(encoding="utf-8")
+    assert html.count('class="nrd_del">↵ LF</span>') == 1
+    assert html.count('class="nrd_del">↵ CRLF</span>') == 1
+    assert html.count('class="nrd_ins">↵ LF</span>') == 1
+
+
+def test_duplicate_links_are_individually_marked_as_removed(
+    fixture_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    baseline, candidate = fixture_roots
+    path = baseline / "valid" / "system.json"
+    data, _, needs = load_sphinx_needs_json(path)
+    needs["REQ_002"]["links"] = ["REQ_001", "REQ_001", "REQ_001"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    source = tmp_path / "source"
+    generate_reqdiff(baseline, candidate, source)
+    (source / "conf.py").write_text(
+        "extensions = ['sphinx_needs', 'needs_reqdiff']\n", encoding="utf-8"
+    )
+    output = tmp_path / "html"
+    assert build_main(["-b", "html", "-W", "-n", str(source), str(output)]) == 0
+    html = (output / "valid__system" / "diff.html").read_text(encoding="utf-8")
+    assert len(re.findall(r'<span class="nrd_del">[^<]*REQ_001[^<]*</span>', html)) == 2
+    assert len(re.findall(r'<span class="nrd_ins">[^<]*REQ_004[^<]*</span>', html)) == 1
 
 
 def test_index_lists_only_files_with_real_differences(

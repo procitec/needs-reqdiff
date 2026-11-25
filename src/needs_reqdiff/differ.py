@@ -8,6 +8,8 @@ from typing import Any
 from .loader import FileScanner, InvalidNeedsJsonError, JsonParseError, load_sphinx_needs_json
 from .models import ComparisonResult, FileComparison, FileLoadError, NeedDiff
 
+RELATED_LINK_FIELDS = ("links", "implements", "testet", "required", "parent_needs")
+
 DEFAULT_COMPARE_FIELDS = (
     "id",
     "title",
@@ -17,10 +19,7 @@ DEFAULT_COMPARE_FIELDS = (
     "type",
     "type_name",
     "tags",
-    "links",
-    "implements",
-    "testet",
-    "parent_needs",
+    *RELATED_LINK_FIELDS,
     "docname",
     "sections",
 )

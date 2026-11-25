@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections import ChainMap, Counter, deque
+from collections.abc import Iterable, Mapping
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-from .differ import DEFAULT_COMPARE_FIELDS, fieldwise_changes
+from .differ import DEFAULT_COMPARE_FIELDS, RELATED_LINK_FIELDS, fieldwise_changes
 from .models import ComparisonResult, FileComparison
 
 NEEDTABLE_COLUMNS = "id;title;status;type;tags;links;docname"
@@ -16,9 +18,11 @@ CHANGED_OLD_PREFIX = "OLD_"
 CHANGED_NEW_PREFIX = "NEW_"
 CHANGED_OLD_FOCUS_TAG = "diff_changed_old_focus"
 CHANGED_NEW_FOCUS_TAG = "diff_changed_new_focus"
-RELATED_LINK_FIELDS = ("links", "implements", "testet", "parent_needs")
 RELATED_CONTENT_FIELDS = ("content", "description")
 NEED_ROLE_PATTERN = re.compile(r":need:`([^`]+)`")
+LINK_LIST_TOKEN_PATTERN = re.compile(r"<<.*?(?:>>|$)|<\{.*?(?:\}>|$)|[\[\],;|]", re.DOTALL)
+LINE_BREAK_LABELS = {"\n": "LF", "\r\n": "CRLF", "\r": "CR"}
+LINE_BREAK_PATTERN = r"\r\n|\n|\r"
 
 
 def _slugify_path(relative_path: Path) -> str:
@@ -89,12 +93,29 @@ def _split_part_reference(value: str) -> tuple[str, str | None]:
     return parent_id, part_id
 
 
+def _split_link_string(value: str) -> list[str]:
+    """Split a scalar link list, keeping separators between references."""
+    parts = []
+    start = depth = 0
+    for match in LINK_LIST_TOKEN_PATTERN.finditer(value):
+        token = match[0]
+        if token == "[":
+            depth += 1
+        elif token == "]":
+            depth = max(depth - 1, 0)
+        elif depth == 0 and token in {",", ";", "|"}:
+            parts.extend((value[start : match.start()], token))
+            start = match.end()
+    parts.append(value[start:])
+    return parts
+
+
 def _iter_related_need_ids(need: dict[str, Any]) -> list[str]:
     related_ids: list[str] = []
     for field in RELATED_LINK_FIELDS:
         raw_values = need.get(field, [])
         if isinstance(raw_values, str):
-            raw_values = [raw_values]
+            raw_values = _split_link_string(raw_values)[::2]
         if not isinstance(raw_values, list):
             continue
         for raw_value in raw_values:
@@ -132,6 +153,26 @@ def _collect_linked_needs(
     return {need_id: source_needs[need_id] for need_id in source_needs if need_id in seen}
 
 
+def _include_link_context(
+    source_needs: Mapping[str, dict[str, Any]],
+    snapshot: dict[str, dict[str, Any]],
+    exported_needs: Iterable[dict[str, Any]],
+    report_prefixes: dict[str, str],
+    prefix: str,
+) -> None:
+    """Include targets that would otherwise be missing from this side of the report."""
+    pending = deque(exported_needs)
+    while pending:
+        for related_id in _iter_related_need_ids(pending.popleft()):
+            need_id, _ = _split_part_reference(related_id)
+            if need_id in report_prefixes or need_id not in source_needs:
+                continue
+            target = source_needs[need_id]
+            snapshot[need_id] = target
+            report_prefixes[need_id] = prefix
+            pending.append(target)
+
+
 def _replace_need_roles_in_text(text: str) -> str:
     def replace(match: re.Match[str]) -> str:
         target = match.group(1).strip()
@@ -140,49 +181,33 @@ def _replace_need_roles_in_text(text: str) -> str:
     return NEED_ROLE_PATTERN.sub(replace, text)
 
 
-def _prefix_related_reference(raw_value: str, prefix: str, available_need_ids: set[str]) -> str:
-    if not isinstance(raw_value, str):
+def _rewrite_related_reference(raw_value: str, target_ids: Mapping[str, str]) -> str:
+    parent_id, _ = _split_part_reference(raw_value)
+    target_id = target_ids.get(parent_id)
+    if target_id is None:
         return raw_value
 
-    core, sep, suffix = raw_value.partition("[")
-    normalized = core.strip()
-    if not normalized:
-        return raw_value
-
-    parent_id, part_id = _split_part_reference(normalized)
-    target_need_id = parent_id if part_id is not None else normalized
-
-    if target_need_id not in available_need_ids:
-        return raw_value
-
-    prefixed = f"{prefix}{parent_id}" if part_id is not None else f"{prefix}{normalized}"
-    if part_id is not None:
-        prefixed = f"{prefixed}.{part_id}"
-
-    if sep:
-        return f"{prefixed}[{suffix}"
-    return prefixed
+    start = len(raw_value) - len(raw_value.lstrip())
+    return f"{raw_value[:start]}{target_id}{raw_value[start + len(parent_id) :]}"
 
 
-def _prefix_need_for_export(
+def _rewrite_need_for_export(
     need: dict[str, Any],
-    prefix: str,
-    available_need_ids: set[str],
+    export_id: str,
+    target_ids: Mapping[str, str],
 ) -> dict[str, Any]:
     copied = json.loads(json.dumps(need, ensure_ascii=False))
-    need_id = copied.get("id")
-    if isinstance(need_id, str):
-        copied["id"] = f"{prefix}{need_id}"
+    copied["id"] = export_id
 
     for field in RELATED_LINK_FIELDS:
         raw_values = copied.get(field)
         if isinstance(raw_values, str):
-            copied[field] = _prefix_related_reference(raw_values, prefix, available_need_ids)
+            parts = _split_link_string(raw_values)
+            parts[::2] = [_rewrite_related_reference(part, target_ids) for part in parts[::2]]
+            copied[field] = "".join(parts)
         elif isinstance(raw_values, list):
             copied[field] = [
-                _prefix_related_reference(value, prefix, available_need_ids)
-                if isinstance(value, str)
-                else value
+                _rewrite_related_reference(value, target_ids) if isinstance(value, str) else value
                 for value in raw_values
             ]
     for field in RELATED_CONTENT_FIELDS:
@@ -195,13 +220,54 @@ def _prefix_need_for_export(
 
 def _prepare_export_needs(
     source_needs: dict[str, dict[str, Any]],
-    prefix: str,
+    export_ids: dict[str, str],
+    other_local_ids: dict[str, str] | None = None,
+    report_ids: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    available_need_ids = set(source_needs.keys())
-    prepared: dict[str, dict[str, Any]] = {}
-    for need_id, need in source_needs.items():
-        prepared[f"{prefix}{need_id}"] = _prefix_need_for_export(need, prefix, available_need_ids)
-    return prepared
+    target_ids = ChainMap(export_ids, other_local_ids or {}, report_ids or {})
+    return {
+        export_ids[need_id]: _rewrite_need_for_export(need, export_ids[need_id], target_ids)
+        for need_id, need in source_needs.items()
+    }
+
+
+def _allocate_export_ids(
+    exports: dict[tuple[Path, str], dict[str, dict[str, Any]]],
+) -> dict[tuple[Path, str], dict[str, str]]:
+    # Keep the original export ID for one occurrence, preferring a native need.
+    owners: dict[str, tuple[Path, str]] = {}
+    for key, needs in exports.items():
+        _, prefix = key
+        for need_id, need in needs.items():
+            base_id = f"{prefix}{need_id}"
+            owner = owners.get(base_id)
+            if owner is None or (
+                exports[owner][need_id].get("is_import") is True
+                and need.get("is_import") is not True
+            ):
+                owners[base_id] = key
+
+    used_ids = set(owners)
+    allocated: dict[tuple[Path, str], dict[str, str]] = {}
+    for key, needs in exports.items():
+        path, prefix = key
+        module = re.sub(r"[^A-Z0-9_]+", "_", _slugify_path(path).upper())
+        ids: dict[str, str] = {}
+        allocated[key] = ids
+        for need_id in needs:
+            base_id = f"{prefix}{need_id}"
+            if owners[base_id] == key:
+                ids[need_id] = base_id
+                continue
+            qualified_id = f"{base_id}__{module}"
+            export_id = qualified_id
+            number = 2
+            while export_id in used_ids:
+                export_id = f"{qualified_id}_{number}"
+                number += 1
+            ids[need_id] = export_id
+            used_ids.add(export_id)
+    return allocated
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -228,7 +294,7 @@ def _format_table_value(value: object) -> str:
 
 
 def _split_diff_tokens(text: str) -> list[str]:
-    return re.findall(r"\s+|\S+", text)
+    return re.findall(rf"{LINE_BREAK_PATTERN}|[^\S\r\n]+|\S+", text)
 
 
 def _display_labels(comparison: FileComparison) -> tuple[str, str]:
@@ -303,39 +369,62 @@ def _wrap_role(text: str, role: str) -> str:
     return f"{leading}:{role}:`{core}`{trailing}"
 
 
-def _highlight_new_text(old_text: str, new_text: str) -> str:
+def _highlight_chunk(chunk: str, break_role: str, text_role: str | None = None) -> str:
+    parts = re.split(rf"({LINE_BREAK_PATTERN})", chunk)
+    for index in range(1, len(parts), 2):
+        line_break = parts[index]
+        marker = _wrap_role(f"↵ {LINE_BREAK_LABELS[line_break]}", break_role)
+        # An escaped space lets the RST role follow text without adding a visible space.
+        parts[index] = rf"\ {marker}" + line_break
+    if text_role is not None:
+        parts[::2] = [_wrap_role(part, text_role) for part in parts[::2]]
+    return "".join(parts)
+
+
+def _highlight_text_diff(old_text: str, new_text: str) -> tuple[str, str]:
     old_tokens = _split_diff_tokens(old_text)
     new_tokens = _split_diff_tokens(new_text)
     matcher = SequenceMatcher(a=old_tokens, b=new_tokens)
-    rendered: list[str] = []
+    old_rendered: list[str] = []
+    new_rendered: list[str] = []
 
-    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
-        chunk = "".join(new_tokens[j1:j2])
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        old_chunk = "".join(old_tokens[i1:i2])
+        new_chunk = "".join(new_tokens[j1:j2])
         if tag == "equal":
-            rendered.append(chunk)
-        elif tag == "insert":
-            rendered.append(_wrap_role(chunk, "nrd_ins"))
-        elif tag == "replace":
-            rendered.append(_wrap_role(chunk, "nrd_changed"))
-        elif tag == "delete":
-            continue
+            old_rendered.append(old_chunk)
+            new_rendered.append(new_chunk)
+        else:
+            old_rendered.append(_highlight_chunk(old_chunk, "nrd_del"))
+            text_role = "nrd_ins" if tag == "insert" else "nrd_changed"
+            new_rendered.append(_highlight_chunk(new_chunk, "nrd_ins", text_role))
 
-    return "".join(rendered)
+    return "".join(old_rendered), "".join(new_rendered)
 
 
-def _render_diff_value(old_value: Any, new_value: Any) -> str:
-    if isinstance(old_value, str) and isinstance(new_value, str):
-        return _format_table_value(_highlight_new_text(old_value, new_value))
-    # return _format_value(new_value)
-    return _format_table_value(new_value)
+def _highlight_list_diff(old_values: list[Any], new_values: list[Any]) -> tuple[str, str]:
+    old_items = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in old_values]
+    new_items = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in new_values]
+
+    def render(items: list[str], other_items: list[str], role: str) -> str:
+        matches = Counter(other_items)
+        marked = []
+        for item in items:
+            if matches[item] > 0:
+                matches[item] -= 1
+                marked.append(item)
+            else:
+                marked.append(_wrap_role(item, role))
+        return f"[{', '.join(marked)}]"
+
+    return render(old_items, new_items, "nrd_del"), render(new_items, old_items, "nrd_ins")
 
 
 def _render_side_by_side_block(
-    comparison: FileComparison, need_id: str, compare_fields: tuple[str, ...]
+    comparison: FileComparison, need_id: str, new_export_id: str, compare_fields: tuple[str, ...]
 ) -> str:
     assert comparison.diff is not None
     old_label, new_label = _display_labels(comparison)
-    new_prefixed_id = f"{CHANGED_NEW_PREFIX}{need_id}"
 
     old_need = comparison.diff.changed_old[need_id]
     new_need = comparison.diff.changed_new[need_id]
@@ -346,9 +435,11 @@ def _render_side_by_side_block(
                 old_value = _replace_need_roles_in_text(old_value)
             if isinstance(new_value, str):
                 new_value = _replace_need_roles_in_text(new_value)
-        rows.append(
-            [field, _format_table_value(old_value), _render_diff_value(old_value, new_value)]
-        )
+        if isinstance(old_value, str) and isinstance(new_value, str):
+            old_value, new_value = _highlight_text_diff(old_value, new_value)
+        elif isinstance(old_value, list) and isinstance(new_value, list):
+            old_value, new_value = _highlight_list_diff(old_value, new_value)
+        rows.append([field, _format_table_value(old_value), _format_table_value(new_value)])
 
     if not rows:
         rows = [["(keine relevanten Änderungen)", "", ""]]
@@ -357,7 +448,7 @@ def _render_side_by_side_block(
     lines = [
         *_heading(title, "^"),
         "",
-        f"Siehe Anhang: :need:`{new_prefixed_id}`",
+        f"Siehe Anhang: :need:`{new_export_id}`",
         "",
         ".. table::",
         "   :class: need_rd_table",
@@ -370,7 +461,9 @@ def _render_side_by_side_block(
     return "\n".join(lines)
 
 
-def _render_report_rst(comparison: FileComparison, compare_fields: tuple[str, ...]) -> str:
+def _render_report_rst(
+    comparison: FileComparison, new_snapshot_ids: dict[str, str], compare_fields: tuple[str, ...]
+) -> str:
     assert comparison.diff is not None
     title = comparison.relative_path.as_posix()
     changed_ids = sorted(comparison.diff.changed_new)
@@ -389,7 +482,7 @@ def _render_report_rst(comparison: FileComparison, compare_fields: tuple[str, ..
         *_heading("Neu hinzugekommene Anforderungen", "-"),
         "",
         ".. needtable::",
-        '   :filter: "diff_added" in tags',
+        '   :filter: c.this_doc() and "diff_added" in tags',
         f"   :columns: {NEEDTABLE_COLUMNS}",
         "   :style: table",
         "   :class: need_rd",
@@ -398,7 +491,7 @@ def _render_report_rst(comparison: FileComparison, compare_fields: tuple[str, ..
         *_heading("Geänderte Anforderungen", "-"),
         "",
         ".. needtable::",
-        f'   :filter: "{CHANGED_NEW_FOCUS_TAG}" in tags',
+        f'   :filter: c.this_doc() and "{CHANGED_NEW_FOCUS_TAG}" in tags',
         f"   :columns: {NEEDTABLE_COLUMNS}",
         "   :style: datatable",
         "   :class: need_rd",
@@ -407,7 +500,11 @@ def _render_report_rst(comparison: FileComparison, compare_fields: tuple[str, ..
 
     if changed_ids:
         for need_id in changed_ids:
-            lines.append(_render_side_by_side_block(comparison, need_id, compare_fields))
+            lines.append(
+                _render_side_by_side_block(
+                    comparison, need_id, new_snapshot_ids[need_id], compare_fields
+                )
+            )
     else:
         lines.extend(["Keine geänderten Anforderungen.", ""])
 
@@ -416,7 +513,7 @@ def _render_report_rst(comparison: FileComparison, compare_fields: tuple[str, ..
             *_heading("Entfernte Anforderungen", "-"),
             "",
             ".. needtable::",
-            '   :filter: "diff_removed" in tags',
+            '   :filter: c.this_doc() and "diff_removed" in tags',
             f"   :columns: {NEEDTABLE_COLUMNS}",
             "   :style: table",
             "   :class: need_rd",
@@ -543,34 +640,119 @@ def write_reports(
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for comparison in result.changed_files:
+    changed_files = result.changed_files
+    old_prefixes: dict[str, str] = {}
+    new_prefixes: dict[str, str] = {}
+    old_source: dict[str, dict[str, Any]] = {}
+    new_source: dict[str, dict[str, Any]] = {}
+    old_snapshots: dict[Path, dict[str, dict[str, Any]]] = {}
+    new_snapshots: dict[Path, dict[str, dict[str, Any]]] = {}
+
+    for comparison in result.comparable_files:
+        assert comparison.old_data is not None
+        assert comparison.new_data is not None
+        assert comparison.old_version is not None
+        assert comparison.new_version is not None
+        old_source.update(comparison.old_data["versions"][comparison.old_version]["needs"])
+        new_source.update(comparison.new_data["versions"][comparison.new_version]["needs"])
+
+    for comparison in changed_files:
+        assert comparison.diff is not None
+        assert comparison.old_data is not None
+        assert comparison.new_data is not None
+        assert comparison.old_version is not None
+        assert comparison.new_version is not None
+        old_prefixes.update(dict.fromkeys(comparison.diff.removed, REMOVED_PREFIX))
+        old_prefixes.update(dict.fromkeys(comparison.diff.changed_old, CHANGED_OLD_PREFIX))
+        new_prefixes.update(dict.fromkeys(comparison.diff.added, ADDED_PREFIX))
+        new_prefixes.update(dict.fromkeys(comparison.diff.changed_new, CHANGED_NEW_PREFIX))
+
+        path = comparison.relative_path
+        old_snapshots[path] = _collect_linked_needs(
+            comparison.old_data["versions"][comparison.old_version]["needs"],
+            set(comparison.diff.changed_old),
+        )
+        new_snapshots[path] = _collect_linked_needs(
+            comparison.new_data["versions"][comparison.new_version]["needs"],
+            set(comparison.diff.changed_new),
+        )
+
+    # Reuse context already present in any snapshot, keeping ADD_/REM_ as the
+    # primary targets for added or removed needs referenced from other exports.
+    for snapshot in old_snapshots.values():
+        for need_id in snapshot:
+            old_prefixes.setdefault(need_id, CHANGED_OLD_PREFIX)
+    for snapshot in new_snapshots.values():
+        for need_id in snapshot:
+            new_prefixes.setdefault(need_id, CHANGED_NEW_PREFIX)
+
+    exports: dict[tuple[Path, str], dict[str, dict[str, Any]]] = {}
+    for comparison in changed_files:
+        assert comparison.diff is not None
+        path = comparison.relative_path
+        old_snapshot = old_snapshots[path]
+        new_snapshot = new_snapshots[path]
+        _include_link_context(
+            old_source,
+            old_snapshot,
+            [*comparison.diff.removed.values(), *old_snapshot.values()],
+            old_prefixes,
+            CHANGED_OLD_PREFIX,
+        )
+        _include_link_context(
+            new_source,
+            new_snapshot,
+            [*comparison.diff.added.values(), *new_snapshot.values()],
+            new_prefixes,
+            CHANGED_NEW_PREFIX,
+        )
+        exports[path, ADDED_PREFIX] = comparison.diff.added
+        exports[path, REMOVED_PREFIX] = comparison.diff.removed
+        exports[path, CHANGED_OLD_PREFIX] = old_snapshot
+        exports[path, CHANGED_NEW_PREFIX] = new_snapshot
+
+    export_ids = _allocate_export_ids(exports)
+    old_ids = {need_id: f"{prefix}{need_id}" for need_id, prefix in old_prefixes.items()}
+    new_ids = {need_id: f"{prefix}{need_id}" for need_id, prefix in new_prefixes.items()}
+
+    for comparison in changed_files:
         assert comparison.diff is not None
         assert comparison.old_data is not None
         assert comparison.new_data is not None
         assert comparison.old_version is not None
         assert comparison.new_version is not None
 
-        target_dir = output_dir / _slugify_path(comparison.relative_path)
+        path = comparison.relative_path
+        target_dir = output_dir / _slugify_path(path)
         target_dir.mkdir(parents=True, exist_ok=True)
-
-        old_source_needs = comparison.old_data["versions"][comparison.old_version]["needs"]
-        new_source_needs = comparison.new_data["versions"][comparison.new_version]["needs"]
+        added_ids = export_ids[path, ADDED_PREFIX]
+        removed_ids = export_ids[path, REMOVED_PREFIX]
+        old_snapshot_ids = export_ids[path, CHANGED_OLD_PREFIX]
+        new_snapshot_ids = export_ids[path, CHANGED_NEW_PREFIX]
 
         changed_old_visible = _needs_with_focus_tags(
-            _collect_linked_needs(old_source_needs, set(comparison.diff.changed_old)),
+            old_snapshots[path],
             set(comparison.diff.changed_old),
             CHANGED_OLD_FOCUS_TAG,
         )
         changed_new_visible = _needs_with_focus_tags(
-            _collect_linked_needs(new_source_needs, set(comparison.diff.changed_new)),
+            new_snapshots[path],
             set(comparison.diff.changed_new),
             CHANGED_NEW_FOCUS_TAG,
         )
 
-        added_prepared = _prepare_export_needs(comparison.diff.added, ADDED_PREFIX)
-        removed_prepared = _prepare_export_needs(comparison.diff.removed, REMOVED_PREFIX)
-        changed_old_prepared = _prepare_export_needs(changed_old_visible, CHANGED_OLD_PREFIX)
-        changed_new_prepared = _prepare_export_needs(changed_new_visible, CHANGED_NEW_PREFIX)
+        added_prepared = _prepare_export_needs(
+            comparison.diff.added, added_ids, new_snapshot_ids, new_ids
+        )
+        removed_prepared = _prepare_export_needs(
+            comparison.diff.removed, removed_ids, old_snapshot_ids, old_ids
+        )
+        changed_old_prepared = _prepare_export_needs(
+            changed_old_visible, old_snapshot_ids, removed_ids, old_ids
+        )
+        changed_new_prepared = _prepare_export_needs(
+            changed_new_visible, new_snapshot_ids, added_ids, new_ids
+        )
 
         _write_json(
             target_dir / "added.json",
@@ -593,7 +775,7 @@ def write_reports(
             ),
         )
         (target_dir / "diff.rst").write_text(
-            _render_report_rst(comparison, compare_fields), encoding="utf-8"
+            _render_report_rst(comparison, new_snapshot_ids, compare_fields), encoding="utf-8"
         )
 
     index_path = output_dir / "index.rst"
