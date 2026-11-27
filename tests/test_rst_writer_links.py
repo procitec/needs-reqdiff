@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -68,7 +69,7 @@ def test_added_testet_links_resolve_in_sphinx(
 
 
 def _write_needs(
-    root: Path, filename: str, version: str, needs: dict[str, dict[str, object]]
+    root: Path, filename: str, version: str, needs: Mapping[str, Mapping[str, object]]
 ) -> None:
     root.mkdir(parents=True, exist_ok=True)
     export = {
