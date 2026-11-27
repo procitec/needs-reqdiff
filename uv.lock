@@ -338,7 +338,7 @@ wheels = [
 
 [[package]]
 name = "needs-reqdiff"
-version = "26.1"
+version = "26.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "sphinx" },
@@ -370,8 +370,8 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
     { name = "sphinx", specifier = ">=8" },
     { name = "sphinx", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "sphinx-needs", specifier = ">=9" },
-    { name = "sphinx-needs", marker = "extra == 'dev'", specifier = ">=9" },
+    { name = "sphinx-needs", specifier = ">=8" },
+    { name = "sphinx-needs", marker = "extra == 'dev'", specifier = ">=8" },
 ]
 provides-extras = ["dev"]
 
@@ -381,7 +381,7 @@ dev = [
     { name = "pytest", specifier = ">=9.0" },
     { name = "ruff", specifier = ">=0.3" },
     { name = "sphinx", specifier = ">=8" },
-    { name = "sphinx-needs", specifier = ">=9" },
+    { name = "sphinx-needs", specifier = ">=8" },
 ]
 
 [[package]]
