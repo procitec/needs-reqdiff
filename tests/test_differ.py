@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from html import unescape
 from pathlib import Path
 
 from sphinx.cmd.build import build_main
@@ -88,8 +89,7 @@ def test_generate_reqdiff_writes_index_diff_and_prefixed_change_exports(
     assert "valid/system.json\n=================" in diff_text
     assert "Übersicht\n---------" in diff_text
     assert "Neu hinzugekommene Anforderungen\n-------------------------------" in diff_text
-    assert ".. table::" in diff_text
-    assert "   :class: need_rd_table" in diff_text
+    assert ".. nrd-diff-table::" in diff_text
     # assert f":id_prefix: {CHANGED_OLD_PREFIX}" in diff_text
     # assert f":id_prefix: {CHANGED_NEW_PREFIX}" in diff_text
     assert "REQ_002\n^^^^^^^" in diff_text
@@ -186,6 +186,10 @@ def test_generated_rst_builds_as_html_with_sphinx(
     diff_html = (build_dir / "html" / "reqdiff" / "valid__system" / "diff.html").read_text(
         encoding="utf-8"
     )
+    table = re.search(r'<table class="[^"]*\bneed_rd_table\b[^"]*">.*?</table>', diff_html, re.S)
+    assert table is not None
+    assert reference in table.group()
+    assert "nrd_link" not in table.group()
     assert 'class="nrd_link">REQ_NOT_EXPORTED</span>' in diff_html
     combined = warning_path.read_text(encoding="utf-8") if warning_path.exists() else ""
     assert "could not be imported" not in combined
@@ -238,6 +242,48 @@ def test_duplicate_links_are_individually_marked_as_removed(
     html = (output / "valid__system" / "diff.html").read_text(encoding="utf-8")
     assert len(re.findall(r'<span class="nrd_del">[^<]*REQ_001[^<]*</span>', html)) == 2
     assert len(re.findall(r'<span class="nrd_ins">[^<]*REQ_004[^<]*</span>', html)) == 1
+
+
+def test_diff_table_preserves_literal_rst_and_indentation(
+    fixture_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    baseline, candidate = fixture_roots
+    template = (
+        "Die Signalstartzeit kann im Falle\n"
+        '   **{source}** - aus dem "Änderungsdatum"\n'
+        "ansonsten :need:`REQ_MISSING`\n"
+        "\n"
+        "   .. note:: <Text> mit | Trennzeichen"
+    )
+    for root, label in ((baseline, "Datei"), (candidate, "System")):
+        path = root / "valid" / "system.json"
+        data, _, needs = load_sphinx_needs_json(path)
+        needs["REQ_002"]["description"] = template.format(source=label)
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    report = tmp_path / "report"
+    generate_reqdiff(baseline, candidate, report)
+    diff_rst = (report / "valid__system" / "diff.rst").read_text(encoding="utf-8")
+    _, directive, body = diff_rst.partition(".. nrd-diff-table::\n\n")
+    assert directive
+    payload = body.split("\n\n", 1)[0]
+    # Isolate the comparison table from the regular need import in the appendix.
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "conf.py").write_text("extensions = ['needs_reqdiff']\n", encoding="utf-8")
+    (source / "index.rst").write_text(
+        f"Diff\n====\n\n{directive}{payload}\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "html"
+    assert build_main(["-b", "singlehtml", "-W", "-n", str(source), str(output)]) == 0
+    html = (output / "index.html").read_text(encoding="utf-8")
+    blocks = re.findall(r'<pre class="literal-block">(.*?)</pre>', html, re.S)
+    texts = [unescape(re.sub(r"<[^>]+>", "", block)) for block in blocks]
+    assert template.format(source="Datei") in texts
+    assert template.format(source="System") in texts
+    assert '**<span class="nrd_del">Datei</span>**' in html
+    assert '**<span class="nrd_changed">System</span>**' in html
 
 
 def test_index_lists_only_files_with_real_differences(

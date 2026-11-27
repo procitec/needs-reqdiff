@@ -23,6 +23,7 @@ NEED_ROLE_PATTERN = re.compile(r":need:`([^`]+)`")
 LINK_LIST_TOKEN_PATTERN = re.compile(r"<<.*?(?:>>|$)|<\{.*?(?:\}>|$)|[\[\],;|]", re.DOTALL)
 LINE_BREAK_LABELS = {"\n": "LF", "\r\n": "CRLF", "\r": "CR"}
 LINE_BREAK_PATTERN = r"\r\n|\n|\r"
+DiffCell = list[tuple[str, str | None]]
 
 
 def _slugify_path(relative_path: Path) -> str:
@@ -294,7 +295,7 @@ def _format_table_value(value: object) -> str:
 
 
 def _split_diff_tokens(text: str) -> list[str]:
-    return re.findall(rf"{LINE_BREAK_PATTERN}|[^\S\r\n]+|\S+", text)
+    return re.findall(rf"{LINE_BREAK_PATTERN}|[^\S\r\n]+|\w+|[^\w\s]", text)
 
 
 def _display_labels(comparison: FileComparison) -> tuple[str, str]:
@@ -307,115 +308,59 @@ def _display_labels(comparison: FileComparison) -> tuple[str, str]:
     return f"{old_version}-reference", f"{new_version}-current"
 
 
-def _cell_lines(value: object) -> list[str]:
-    text = "" if value is None else str(value)
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    lines = text.split("\n")
-    if not lines:
-        return [""]
-    return lines
+def _highlight_chunk(chunk: str, break_class: str, text_class: str) -> DiffCell:
+    segments: DiffCell = []
+    for index, part in enumerate(re.split(rf"({LINE_BREAK_PATTERN})", chunk)):
+        if index % 2:
+            segments.append((f"↵ {LINE_BREAK_LABELS[part]}", break_class))
+            segments.append((part, None))
+        elif part:
+            leading = len(part) - len(part.lstrip())
+            end = len(part.rstrip())
+            segments.append((part[:leading], None))
+            if end > leading:
+                segments.extend(((part[leading:end], text_class), (part[end:], None)))
+    return segments
 
 
-def _grid_table(headers: list[str], rows: list[list[str]]) -> str:
-    all_rows = [headers] + rows
-
-    widths: list[int] = []
-    for col_idx in range(len(headers)):
-        max_width = 0
-        for row in all_rows:
-            for line in _cell_lines(row[col_idx]):
-                max_width = max(max_width, len(line))
-        widths.append(max_width)
-
-    def sep(char: str = "-") -> str:
-        return "+" + "+".join(char * (w + 2) for w in widths) + "+"
-
-    def render_row(row: list[str]) -> list[str]:
-        split_cells = [_cell_lines(cell) for cell in row]
-        row_height = max(len(cell_lines) for cell_lines in split_cells)
-
-        rendered_lines: list[str] = []
-        for line_idx in range(row_height):
-            parts = []
-            for col_idx, cell_lines in enumerate(split_cells):
-                cell_line = cell_lines[line_idx] if line_idx < len(cell_lines) else ""
-                parts.append(f" {cell_line.ljust(widths[col_idx])} ")
-            rendered_lines.append("|" + "|".join(parts) + "|")
-        return rendered_lines
-
-    lines: list[str] = []
-    lines.append(sep("-"))
-    lines.extend(render_row(headers))
-    lines.append(sep("="))
-
-    for row in rows:
-        lines.extend(render_row(row))
-        lines.append(sep("-"))
-
-    return "\n".join(lines)
-
-
-def _wrap_role(text: str, role: str) -> str:
-    if not text:
-        return ""
-    if text.isspace():
-        return text
-    leading = text[: len(text) - len(text.lstrip())]
-    trailing = text[len(text.rstrip()) :]
-    core = text.strip()
-    if not core:
-        return text
-    core = core.replace("`", r"\`")
-    return f"{leading}:{role}:`{core}`{trailing}"
-
-
-def _highlight_chunk(chunk: str, break_role: str, text_role: str | None = None) -> str:
-    parts = re.split(rf"({LINE_BREAK_PATTERN})", chunk)
-    for index in range(1, len(parts), 2):
-        line_break = parts[index]
-        marker = _wrap_role(f"↵ {LINE_BREAK_LABELS[line_break]}", break_role)
-        # An escaped space lets the RST role follow text without adding a visible space.
-        parts[index] = rf"\ {marker}" + line_break
-    if text_role is not None:
-        parts[::2] = [_wrap_role(part, text_role) for part in parts[::2]]
-    return "".join(parts)
-
-
-def _highlight_text_diff(old_text: str, new_text: str) -> tuple[str, str]:
+def _highlight_text_diff(old_text: str, new_text: str) -> tuple[DiffCell, DiffCell]:
     old_tokens = _split_diff_tokens(old_text)
     new_tokens = _split_diff_tokens(new_text)
     matcher = SequenceMatcher(a=old_tokens, b=new_tokens)
-    old_rendered: list[str] = []
-    new_rendered: list[str] = []
+    old_rendered: DiffCell = []
+    new_rendered: DiffCell = []
 
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         old_chunk = "".join(old_tokens[i1:i2])
         new_chunk = "".join(new_tokens[j1:j2])
         if tag == "equal":
-            old_rendered.append(old_chunk)
-            new_rendered.append(new_chunk)
+            old_rendered.append((old_chunk, None))
+            new_rendered.append((new_chunk, None))
         else:
-            old_rendered.append(_highlight_chunk(old_chunk, "nrd_del"))
-            text_role = "nrd_ins" if tag == "insert" else "nrd_changed"
-            new_rendered.append(_highlight_chunk(new_chunk, "nrd_ins", text_role))
+            old_rendered.extend(_highlight_chunk(old_chunk, "nrd_del", "nrd_del"))
+            text_class = "nrd_ins" if tag == "insert" else "nrd_changed"
+            new_rendered.extend(_highlight_chunk(new_chunk, "nrd_ins", text_class))
 
-    return "".join(old_rendered), "".join(new_rendered)
+    return old_rendered, new_rendered
 
 
-def _highlight_list_diff(old_values: list[Any], new_values: list[Any]) -> tuple[str, str]:
+def _highlight_list_diff(old_values: list[Any], new_values: list[Any]) -> tuple[DiffCell, DiffCell]:
     old_items = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in old_values]
     new_items = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in new_values]
 
-    def render(items: list[str], other_items: list[str], role: str) -> str:
+    def render(items: list[str], other_items: list[str], css_class: str) -> DiffCell:
         matches = Counter(other_items)
-        marked = []
-        for item in items:
+        segments: DiffCell = [("[", None)]
+        for index, item in enumerate(items):
+            if index:
+                segments.append((", ", None))
             if matches[item] > 0:
                 matches[item] -= 1
-                marked.append(item)
+                segments.append((item, None))
             else:
-                marked.append(_wrap_role(item, role))
-        return f"[{', '.join(marked)}]"
+                segments.append((item, css_class))
+        segments.append(("]", None))
+        return segments
 
     return render(old_items, new_items, "nrd_del"), render(new_items, old_items, "nrd_ins")
 
@@ -430,19 +375,17 @@ def _render_side_by_side_block(
     new_need = comparison.diff.changed_new[need_id]
     rows = []
     for field, old_value, new_value in fieldwise_changes(old_need, new_need, compare_fields):
-        if field in RELATED_CONTENT_FIELDS:
-            if isinstance(old_value, str):
-                old_value = _replace_need_roles_in_text(old_value)
-            if isinstance(new_value, str):
-                new_value = _replace_need_roles_in_text(new_value)
         if isinstance(old_value, str) and isinstance(new_value, str):
-            old_value, new_value = _highlight_text_diff(old_value, new_value)
+            old_cell, new_cell = _highlight_text_diff(old_value, new_value)
         elif isinstance(old_value, list) and isinstance(new_value, list):
-            old_value, new_value = _highlight_list_diff(old_value, new_value)
-        rows.append([field, _format_table_value(old_value), _format_table_value(new_value)])
+            old_cell, new_cell = _highlight_list_diff(old_value, new_value)
+        else:
+            old_cell = [(_format_table_value(old_value), None)]
+            new_cell = [(_format_table_value(new_value), None)]
+        rows.append((field, old_cell, new_cell))
 
     if not rows:
-        rows = [["(keine relevanten Änderungen)", "", ""]]
+        rows = [("(keine relevanten Änderungen)", [], [])]
 
     title = need_id
     lines = [
@@ -450,13 +393,12 @@ def _render_side_by_side_block(
         "",
         f"Siehe Anhang: :need:`{new_export_id}`",
         "",
-        ".. table::",
-        "   :class: need_rd_table",
+        ".. nrd-diff-table::",
         "",
+        f'   {{"headers": {json.dumps(["Feld", old_label, new_label])}, "rows": [',
+        ",\n".join(f"     {json.dumps(row)}" for row in rows),
+        "   ]}",
     ]
-
-    table_lines = _grid_table(["Feld", old_label, new_label], rows).splitlines()
-    lines.extend([f"   {line}" if line else "" for line in table_lines])
     lines.append("")
     return "\n".join(lines)
 
